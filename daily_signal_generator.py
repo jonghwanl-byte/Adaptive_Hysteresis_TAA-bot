@@ -26,7 +26,7 @@ all_tickers = core_tickers + bond_tickers + rate_ticker
 
 def get_daily_signals_and_report():
     
-    print("... 최신 시장 데이터 다운로드 중 ...")
+##    print("... 최신 시장 데이터 다운로드 중 ...")
     # MA 계산 및 상태 확인을 위해 400일(200MA + 버퍼) 데이터 다운로드
     data_full = yf.download(all_tickers, period="400d", progress=False)
     
@@ -220,9 +220,9 @@ def get_daily_signals_and_report():
         emoji = "🔵" if value >= 0 else "🔴"
         return f"{emoji} ({value:+.1%})"
         
-    report.append(f"{format_price_change(price_change['QQQ'])} QQQ: ${price_info['QQQ']:.1f}")
-    report.append(f"{format_price_change(price_change['GLD'])} GLD: ${price_info['GLD']:.1f}")
-    report.append(f"{format_price_change(price_change['Tactical_Bond'])} 채권({current_bond_ticker}): ${price_info['Tactical_Bond']:.1f}")
+    report.append(QQQ: ${price_info['QQQ']:.1f}" f"{format_price_change(price_change['QQQ'])} )
+    report.append(GLD: ${price_info['GLD']:.1f}" f"{format_price_change(price_change['GLD'])})
+    report.append(채권({current_bond_ticker}): ${price_info['Tactical_Bond']:.1f}" f"{format_price_change(price_change['Tactical_Bond'])})
     
     report.append("\n" + "---")
     

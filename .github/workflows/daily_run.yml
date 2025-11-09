@@ -3,7 +3,6 @@ name: 최강 전략 일일 신호 생성 (Sharpe 1.80)
 on:
   schedule:
     # 매주 월~금요일 오전 8시(KST) = 일요일~목요일 23:00 UTC
-    # (토/일은 실행되지 않음. 월요일 8시는 금요일 장 마감 데이터를 기준으로 함)
     - cron: '0 23 * * 0-4'
     
   # 수동 실행 (Action 탭에서 'Run workflow' 버튼)
@@ -30,16 +29,17 @@ jobs:
           python -m pip install --upgrade pip
           if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
 
-      # 4. 일일 신호 생성 스크립트(Python)를 실행하고, 그 결과를 'REPORT' 변수에 저장합니다
+      # 4. [수정된 부분] 일일 신호 생성 스크립트(Python)를 실행하고, 그 결과를 'REPORT' 변수에 저장합니다
       - name: Run Strategy Script and Capture Output
         id: strategy_output
-        # [수정] 스크립트 실행이 실패하면 Action도 실패하도록 설정 (set -e)
         run: |
           set -e
-          echo "report=$(python daily_signal_generator.py)" >> $GITHUB_OUTPUT
+          # 'EOF' (End Of File) 구분자를 사용하여 여러 줄의 출력을 안전하게 캡처
+          echo "report<<EOF" >> $GITHUB_OUTPUT
+          python daily_signal_generator.py >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
 
       # 5. 텔레그램으로 4번 단계의 'REPORT' 변수 내용을 전송합니다
-      # [수정] step 4가 실패하면 실행되지 않음 (기본값)
       - name: Send Telegram Message
         uses: appleboy/telegram-action@master
         with:

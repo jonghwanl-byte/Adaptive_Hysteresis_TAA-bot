@@ -29,7 +29,7 @@ jobs:
           python -m pip install --upgrade pip
           if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
 
-      # 4. [수정된 부분] 일일 신호 생성 스크립트(Python)를 실행하고, 그 결과를 'REPORT' 변수에 저장합니다
+      # 4. 일일 신호 생성 스크립트(Python)를 실행하고, 그 결과를 'REPORT' 변수에 저장합니다
       - name: Run Strategy Script and Capture Output
         id: strategy_output
         run: |
@@ -43,8 +43,9 @@ jobs:
       - name: Send Telegram Message
         uses: appleboy/telegram-action@master
         with:
-          # [경고] 이 값들은 GitHub Secrets에 저장해야 합니다.
-          to: ${{ secrets.TELEGRAM_CHAT_ID }}
+          # --- [수정된 부분] ---
+          # 챗 ID 변수명을 TELEGRAM_CHAT_ID -> TELEGRAM_TO 로 수정
+          to: ${{ secrets.TELEGRAM_TO }}
           token: ${{ secrets.TELEGRAM_TOKEN }}
           message: |
             ${{ steps.strategy_output.outputs.report }}

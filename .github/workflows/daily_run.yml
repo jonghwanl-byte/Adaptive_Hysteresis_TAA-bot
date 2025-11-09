@@ -1,4 +1,4 @@
-name: "최강 전략" 일일 신호 생성 (Sharpe 1.80)
+name: 최강 전략 일일 신호 생성 (Sharpe 1.80)
 
 on:
   schedule:

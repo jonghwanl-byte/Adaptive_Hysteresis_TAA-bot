@@ -33,18 +33,18 @@ def get_daily_signals_and_report():
     if data_full.empty:
         raise ValueError("데이터 다운로드에 실패했습니다.")
     
-    all_prices_df = data_full['Close']
+    all_prices_df = data_full['Close'].ffill() # 중간에 빈 데이터(휴일 등)를 채움
     
     # --- Tactical_Bond (IEF/TLT) 생성 ---
-    rate_prices = all_prices_df['^TNX'].ffill()
+    rate_prices = all_prices_df['^TNX']
     rate_ma = rate_prices.rolling(window=RATE_MA_WINDOW).mean()
     is_rising_rates = (rate_prices > rate_ma)
     
     bond_prices = pd.Series(
         np.where(
             is_rising_rates, 
-            all_prices_df[BOND_RISING_RATE].ffill(),
-            all_prices_df[BOND_FALLING_RATE].ffill()
+            all_prices_df[BOND_RISING_RATE],
+            all_prices_df[BOND_FALLING_RATE]
         ), 
         index=all_prices_df.index
     )
@@ -52,11 +52,9 @@ def get_daily_signals_and_report():
     
     # --- 최종 분석 데이터 준비 ---
     analysis_tickers = ['QQQ', 'GLD', 'Tactical_Bond']
-    prices_for_signal = pd.concat([all_prices_df[['QQQ', 'GLD']].ffill(), bond_prices.ffill()], axis=1)
+    prices_for_signal = pd.concat([all_prices_df[['QQQ', 'GLD']], bond_prices], axis=1)
     
     # --- [3. 이격도(Hysteresis) 상태 계산] ---
-    # 이 스크립트는 매일 실행되므로, '어제 상태'를 알기 위해
-    # 최소 200일 전부터의 상태를 전부 재계산해야 합니다.
     
     # MA 및 밴드 미리 계산
     ma_lines = {}
@@ -72,14 +70,24 @@ def get_daily_signals_and_report():
     # '상태' 저장을 위한 변수 초기화 (0.0 = OFF, 1.0 = ON)
     yesterday_ma_states = {f"{ticker}_{window}": 0.0 for ticker in analysis_tickers for window in MA_WINDOWS}
     
+    # '어제'와 '오늘'의 스케일러(비중)를 저장할 변수
+    today_scalars = pd.Series(0.0, index=analysis_tickers)
+    yesterday_scalars = pd.Series(0.0, index=analysis_tickers)
+    
+    # '어제'와 '오늘'의 MA 상태(ON/OFF)를 저장할 변수
+    today_ma_states_dict = yesterday_ma_states.copy()
+    yesterday_ma_states_dict = yesterday_ma_states.copy()
+
     # 일별 반복문 (MA 계산이 완료된 시점부터)
     start_index = max(MA_WINDOWS) - 1 
     
     for i in range(start_index, len(prices_for_signal)):
         
-        today_ma_states = {}
+        today_scores = pd.Series(0, index=analysis_tickers)
+        current_ma_states = {}
         
         for ticker in analysis_tickers:
+            score = 0
             for window in MA_WINDOWS:
                 ma_key = f"{ticker}_{window}"
                 yesterday_state = yesterday_ma_states[ma_key]
@@ -94,37 +102,44 @@ def get_daily_signals_and_report():
                 else: 
                     new_state = 1.0 if price > upper else 0.0
                 
-                today_ma_states[ma_key] = new_state
+                current_ma_states[ma_key] = new_state
+                score += new_state
+            
+            today_scores[ticker] = score
+        
+        # '어제'가 마지막 날이면, '어제'의 스케일러와 상태를 저장
+        if i == len(prices_for_signal) - 2:
+            yesterday_scalars = today_scores.map(SCALAR_MAP)
+            yesterday_ma_states_dict = current_ma_states
+            
+        # '오늘'이 마지막 날이면, '오늘'의 스케일러와 상태를 저장
+        if i == len(prices_for_signal) - 1:
+            today_scalars = today_scores.map(SCALAR_MAP)
+            today_ma_states_dict = current_ma_states
         
         # '어제 상태'를 '오늘 상태'로 업데이트
-        yesterday_ma_states = today_ma_states
-        
-    # 반복문이 끝나면, 'yesterday_ma_states'에 가장 마지막 날(어제)의 최종 상태가 저장됨
-    final_ma_states = yesterday_ma_states
+        yesterday_ma_states = current_ma_states
 
     # --- [4. 최종 비중 계산] ---
     
-    # 1. 어제 날짜
-    yesterday = prices_for_signal.index[-1]
+    # 오늘 비중
+    today_invested_qqq = BASE_WEIGHTS['QQQ'] * today_scalars['QQQ']
+    today_invested_gld = BASE_WEIGHTS['GLD'] * today_scalars['GLD']
+    today_invested_bond = BASE_WEIGHTS['Tactical_Bond'] * today_scalars['Tactical_Bond']
+    today_total_cash = 1.0 - (today_invested_qqq + today_invested_gld + today_invested_bond)
     
-    # 2. 어제 기준 MA 점수 계산 (0~3점)
-    ma_scores = pd.Series(0, index=analysis_tickers)
-    for ticker in analysis_tickers:
-        score = 0
-        for window in MA_WINDOWS:
-            score += final_ma_states[f"{ticker}_{window}"]
-        ma_scores[ticker] = score
-
-    # 3. 시나리오 A 스케일러(Scalar) 적용
-    scalars = ma_scores.map(SCALAR_MAP) # 예: QQQ 0.75, GLD 0.50, Bond 1.0
+    # 어제 비중
+    yesterday_invested_qqq = BASE_WEIGHTS['QQQ'] * yesterday_scalars['QQQ']
+    yesterday_invested_gld = BASE_WEIGHTS['GLD'] * yesterday_scalars['GLD']
+    yesterday_invested_bond = BASE_WEIGHTS['Tactical_Bond'] * yesterday_scalars['Tactical_Bond']
+    yesterday_total_cash = 1.0 - (yesterday_invested_qqq + yesterday_invested_gld + yesterday_invested_bond)
     
-    # 4. 최종 투자 비중
-    invested_qqq = BASE_WEIGHTS['QQQ'] * scalars['QQQ']
-    invested_gld = BASE_WEIGHTS['GLD'] * scalars['GLD']
-    invested_bond = BASE_WEIGHTS['Tactical_Bond'] * scalars['Tactical_Bond']
-    total_cash = 1.0 - (invested_qqq + invested_gld + invested_bond)
+    # 비중 변경 여부 확인
+    is_rebalancing_needed = not (today_scalars.equals(yesterday_scalars))
     
     # --- [5. 알림 메시지 생성] ---
+    
+    yesterday = prices_for_signal.index[-1]
     
     # 채권 종류 확인
     current_bond_ticker = BOND_RISING_RATE if is_rising_rates.iloc[-1] else BOND_FALLING_RATE
@@ -134,55 +149,120 @@ def get_daily_signals_and_report():
     price_change = prices_for_signal.pct_change().iloc[-1]
     
     report = []
-    report.append(f"🔔 Adaptive-Hysteresis-TAA (Sharpe 1.80)")
-    report.append(f"   ({yesterday.strftime('%Y-%m-%d')} 마감 기준)")
-    report.append("="*30)
-    
-    # 1. 전일자 정보
-    report.append("📈 [1] 전일 시장 현황")
-    report.append(f"  - QQQ: ${price_info['QQQ']:.2f} ({price_change['QQQ']:.2%})")
-    report.append(f"  - GLD: ${price_info['GLD']:.2f} ({price_change['GLD']:.2%})")
-    report.append(f"  - 채권({current_bond_ticker}): ${price_info['Tactical_Bond']:.2f} ({price_change['Tactical_Bond']:.2%})")
+    report.append(f"🔔 Adaptive Hysteresis TAA (Sharpe 1.80)")
+    report.append(f"({yesterday.strftime('%Y-%m-%d %A')} 마감 기준)") # 요일 추가
 
-    report.append("\n" + "="*30)
+    # [1] 리밸런싱 신호
+    if is_rebalancing_needed:
+        report.append("\n" + "🔼 ====================== 🔼")
+        report.append("    리밸런싱 신호: \"매매 필요\"")
+        report.append("🔼 ====================== 🔼")
+        report.append("(MA 신호 변경으로 목표 비중이 어제와 다릅니다)")
+    else:
+        report.append("\n" + "🟢 ====================== 🟢")
+        report.append("    리밸런싱 신호: \"매매 불필요\"")
+        report.append("🟢 ====================== 🟢")
+        report.append("(모든 MA 신호가 어제와 동일하게 유지되었습니다)")
     
-    # 2. MA 신호 상세
-    report.append("📊 [2] MA 신호 (이격도 +/- 3% 적용)")
+    report.append("\n" + "---")
+
+    # [2] 오늘 목표 비중
+    report.append("💰 [1] 오늘 목표 비중 (신규)")
+    
+    def get_emoji(ticker):
+        if today_scalars[ticker] != yesterday_scalars[ticker]:
+            return "🎯"
+        return "*"
+    
+    report.append(f" {get_emoji('QQQ')} QQQ: {today_invested_qqq:.1%}")
+    report.append(f" {get_emoji('GLD')} GLD: {today_invested_gld:.1%}")
+    
+    if current_bond_ticker == 'IEF':
+        report.append(f" {get_emoji('Tactical_Bond')} IEF (채권): {today_invested_bond:.1%}")
+        report.append(f" * TLT (채권): 0.0%")
+    else:
+        report.append(f" * IEF (채권): 0.0%")
+        report.append(f" {get_emoji('Tactical_Bond')} TLT (채권): {today_invested_bond:.1%}")
+    
+    # 현금 비중 변경 확인
+    cash_emoji = "🎯" if today_total_cash != yesterday_total_cash else "*"
+    report.append(f" {cash_emoji} 현금 (Cash): {today_total_cash:.1%}")
+    
+    report.append("\n" + "---")
+    
+    # [3] 비중 변경 상세
+    report.append("📊 [2] 비중 변경 상세 (매매 신호)")
+    report.append("\n" + "| 자산 | 변경 전 (어제) | 변경 후 (오늘) | 변경폭 |")
+    report.append("| :--- | :---: | :---: | :---: |")
+    
+    def format_change(today, yesterday, ticker):
+        delta = today - yesterday
+        if abs(delta) < 0.0001: return "(유지)"
+        emoji = "🔼" if delta > 0 else "🔽"
+        return f"{emoji} {delta:+.1%}"
+    
+    report.append(f"| QQQ | {yesterday_invested_qqq:.1%} | {today_invested_qqq:.1%} | {format_change(today_invested_qqq, yesterday_invested_qqq, 'QQQ')} |")
+    report.append(f"| GLD | {yesterday_invested_gld:.1%} | {today_invested_gld:.1%} | {format_change(today_invested_gld, yesterday_invested_gld, 'GLD')} |")
+    
+    if current_bond_ticker == 'IEF':
+        report.append(f"| IEF | {yesterday_invested_bond:.1%} | {today_invested_bond:.1%} | {format_change(today_invested_bond, yesterday_invested_bond, 'Tactical_Bond')} |")
+    else:
+        report.append(f"| TLT | {yesterday_invested_bond:.1%} | {today_invested_bond:.1%} | {format_change(today_invested_bond, yesterday_invested_bond, 'Tactical_Bond')} |")
+    
+    report.append(f"| 현금 | {yesterday_total_cash:.1%} | {today_total_cash:.1%} | {format_change(today_total_cash, yesterday_total_cash, 'Cash')} |")
+    
+    report.append("\n" + "---")
+    
+    # [4] 전일 시장 현황
+    report.append("📈 [3] 전일 시장 현황")
+    
+    def format_price_change(value):
+        emoji = "🔵" if value >= 0 else "🔴"
+        return f"{emoji} ({value:+.1%})"
+        
+    report.append(f"{format_price_change(price_change['QQQ'])} QQQ: ${price_info['QQQ']:.1f}")
+    report.append(f"{format_price_change(price_change['GLD'])} GLD: ${price_info['GLD']:.1f}")
+    report.append(f"{format_price_change(price_change['Tactical_Bond'])} 채권({current_bond_ticker}): ${price_info['Tactical_Bond']:.1f}")
+    
+    report.append("\n" + "---")
+    
+    # [5] MA 신호 상세
+    report.append("🔍 [4] MA 신호 상세 (오늘 기준)")
+    report.append(f"(이격도 +/- {N_BAND:.1%} 룰 적용)")
+    
     for ticker in analysis_tickers:
-        t_price = price_info[ticker]
-        t_str = f"  - {ticker} (신호: {ma_scores[ticker]}/3개 ON)"
-        report.append(t_str)
+        score = int(today_scalars[ticker] * 4 / (4/3)) # 1.0 -> 3, 0.75 -> 2, 0.5 -> 1, 0 -> 0
+        status_emoji = "🟢ON" if score > 0 else "🔴OFF"
+        report.append(f"\n**{ticker} (신호: {score}/3개 {status_emoji})**")
         
         for window in MA_WINDOWS:
             ma_key = f"{ticker}_{window}"
+            
+            today_state_val = today_ma_states_dict[ma_key]
+            yesterday_state_val = yesterday_ma_states_dict[ma_key]
+            
+            state_emoji = "🟢ON" if today_state_val == 1.0 else "🔴OFF"
+            
+            # 신호 변경 상태
+            if today_state_val > yesterday_state_val: state_change = "[신규 ON]"
+            elif today_state_val < yesterday_state_val: state_change = "[신규 OFF]"
+            else: state_change = "[유지]"
+            
+            t_price = price_info[ticker]
             ma_val = ma_lines[ma_key].iloc[-1]
-            state = "ON" if final_ma_states[ma_key] == 1.0 else "OFF"
             disparity = (t_price / ma_val) - 1.0
-            report.append(f"    - {window}일: {state} (이격도: {disparity:+.2%})")
-
-    report.append("\n" + "="*30)
-    
-    # 3. 최종 비중
-    report.append("💰 [3] 오늘 목표 비중 (리밸런싱)")
-    report.append(f"  - QQQ: {invested_qqq:.2%}")
-    report.append(f"  - GLD: {invested_gld:.2%}")
-    
-    if current_bond_ticker == 'IEF':
-        report.append(f"  - IEF (채권): {invested_bond:.2%}")
-        report.append(f"  - TLT (채권): 0.00%")
-    else:
-        report.append(f"  - IEF (채권): 0.00%")
-        report.append(f"  - TLT (채권): {invested_bond:.2%}")
-        
-    report.append(f"  - 현금 (Cash): {total_cash:.2%}")
-    report.append("-" * 30)
-    report.append(f"  * 총합: {invested_qqq + invested_gld + invested_bond + total_cash:.2%}")
+            
+            report.append(f"* {window}일: {state_emoji} (이격도: {disparity:+.1%}) {state_change}")
     
     return "\n".join(report)
 
 # --- [6. 메인 실행] ---
 if __name__ == "__main__":
     try:
+        # pandas 출력 옵션 (터미널에서 잘 보이도록)
+        pd.set_option('display.width', 1000)
+        pd.set_option('display.max_rows', None)
+        
         daily_report = get_daily_signals_and_report()
         # GitHub Actions가 이 print() 출력을 캡처하여 텔레그램으로 전송합니다.
         print(daily_report)

@@ -26,7 +26,7 @@ all_tickers = core_tickers + bond_tickers + rate_ticker
 
 def get_daily_signals_and_report():
     
-    print("... 최신 시장 데이터 다운로드 중 ...")
+#    print("... 최신 시장 데이터 다운로드 중 ...")
     data_full = yf.download(all_tickers, period="400d", progress=False)
     
     if data_full.empty:
